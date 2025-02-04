@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>순환소수를 분수로</title>
+  <!-- MathJax for LaTeX rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+  <style>
+    /* 흑백 색상 테마 */
+    body {
+      background-color: #fff;
+      color: #000;
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    h1, h2, h3 {
+      margin: 0.5em 0;
+    }
+    .hidden {
+      display: none;
+    }
+    /* 에너지바(시간 게이지) */
+    #energyBarContainer {
+      width: 300px;
+      height: 20px;
+      background-color: #ccc;
+      margin: 10px 0;
+      position: relative;
+    }
+    #energyBar {
+      width: 100%;
+      height: 100%;
+      background-color: #000;
+      transition: width 0.2s linear;
+    }
+    /* 문제/보기 스타일 */
+    .question-container {
+      margin: 20px 0;
+      border: 1px solid #000;
+      padding: 10px;
+    }
+    .choices {
+      margin-top: 10px;
+    }
+    .choice-item {
+      margin: 5px 0;
+    }
+    .input-fraction {
+      margin: 5px 0;
+    }
+    /* 남은 기회 표시 */
+    #livesDisplay {
+      margin: 10px 0;
+    }
+    /* 전체 시간 표시 */
+    #totalTimeDisplay {
+      margin: 10px 0;
+    }
+    /* 전송 결과 */
+    #response {
+      margin-top: 10px;
+      white-space: pre;
+    }
+    /* 버튼 스타일 약간 */
+    button {
+      cursor: pointer;
+      margin: 5px 0;
+    }
+  </style>
+</head>
+<body>
+<h1>순환소수를 분수로</h1>
+
+<!-- 0. 첫 화면(이름/난이도 입력) -->
+<div id="startScreen">
+  <label>플레이어 이름: <input type="text" id="playerName" /></label><br><br>
+  난이도 선택: 
+  <select id="difficultySelect">
+    <option value="hardest">최상 (시작 시간 20초, +20점)</option>
+    <option value="hard">상 (시작 시간 30초, +15점)</option>
+    <option value="medium">중 (시작 시간 40초, +13점)</option>
+    <option value="easy">하 (시간 제한 없음, +10점)</option>
+  </select><br><br>
+  <button onclick="startGame()">게임 시작</button>
+</div>
+
+<!-- 게임 화면 -->
+<div id="gameScreen" class="hidden">
+  <h2>에너지바(남은 시간)</h2>
+  <div id="energyBarContainer">
+    <div id="energyBar"></div>
+  </div>
+
+  <!-- 전체 시간 표시 -->
+  <div id="totalTimeDisplay">총 경과 시간: 0초</div>
+
+  <!-- 남은 기회 표시 -->
+  <div id="livesDisplay">남은 기회: 3</div>
+  
+  <!-- 현재 점수 표시 -->
+  <div>현재 점수: <span id="scoreDisplay">0</span></div>
+
+  <!-- 문제 표시 영역 -->
+  <div id="questionArea"></div>
+
+  <!-- 정답 제출 -->
+  <button id="submitAnswerBtn" onclick="submitAnswer()">정답 제출</button>
+
+  <!-- 다음 문제(시간 강제 소진 시) -->
+  <button id="nextQuestionBtn" class="hidden" onclick="nextQuestion()">다음 문제</button>
+
+  <!-- 게임 종료 후 점수 전송 -->
+  <div id="endGameSection" class="hidden">
+    <h3>게임이 종료되었습니다!</h3>
+    <button onclick="sendScore()">점수전송</button>
+    <div id="response"></div>
+  </div>
+</div>
+
+<script>
+/* 
+  ========== 순환소수 퀴즈 게임 전역 변수 ==========
+*/
+let playerName = "";
+let difficulty = "medium";
+
+let timeStartValue = 40;   // 난이도별 초기 시간
+let pointPerCorrect = 13;  // 난이도별 문제 정답 시 획득 점수
+let energy = 40;           // 현재 남은 '에너지바' 시간
+let energyInterval = null; // setInterval 참조
+let totalTime = 0;         // 전체 경과 시간(초)
+let totalTimeInterval = null;
+
+let score = 0;     // 현재 점수
+let lives = 3;     // 남은 기회(3회 틀리면 게임 종료)
+let currentQuestionIndex = 0; // 현재 몇 번째 문제인지
+let allQuestions = [];    // 문제 저장(40개 + 무한 랜덤)
+
+let questionInProgress = null; // 현재 문제 객체
+let answered = false;          // 현재 문제 정답 제출 여부
+
+// 식 찾기(유형①)에서 사용할 6가지 식(보기)
+const formulaChoicesMaster = [
+  { label: "ㄱ", expr: "\\(10x - x\\)" },
+  { label: "ㄴ", expr: "\\(100x - x\\)" },
+  { label: "ㄷ", expr: "\\(100x - 10x\\)" },
+  { label: "ㄹ", expr: "\\(1000x - x\\)" },
+  { label: "ㅁ", expr: "\\(1000x - 10x\\)" },
+  { label: "ㅂ", expr: "\\(1000x - 100x\\)" }
+];
+
+/*
+  ========== 문제 데이터 ==========
+  
+  type: 'formula' (식 찾기 문제, 사지선다)
+        'fraction' (기약분수 구하기 문제, 주관식)
+*/
+
+// ---------------------- 유형① (식 찾기) 20문제 ----------------------
+const formulaProblems = [
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.\\dot{3}\\)",
+    correctLabel: "ㄱ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.\\dot{9}\\)",
+    correctLabel: "ㄱ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 1.\\dot{2}\\)",
+    correctLabel: "ㄱ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.4\\dot{7}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 2.3\\dot{5}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 3.1\\dot{4}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.12\\dot{3}\\)",
+    correctLabel: "ㅂ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 4.5\\dot{6}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 2.45\\dot{6}\\)",
+    correctLabel: "ㅂ"
+  },
+  {
+    // 수정: 0.3\dot{14} → 0.3\dot{1}\dot{4}
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.3\\dot{1}\\dot{4}\\)",
+    correctLabel: "ㅁ"
+  },
+  {
+    // 수정: 0.7\dot{84} → 0.7\dot{8}\dot{4}
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.7\\dot{8}\\dot{4}\\)",
+    correctLabel: "ㅁ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 3.27\\dot{2}\\)",
+    correctLabel: "ㅂ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.01\\dot{5}\\)",
+    correctLabel: "ㅂ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 5.0\\dot{4}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.56\\dot{7}\\)",
+    correctLabel: "ㅂ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 1.8\\dot{3}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    // 수정: 0.2\dot{43} → 0.2\dot{4}\dot{3}
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.2\\dot{4}\\dot{3}\\)",
+    correctLabel: "ㅁ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 3.12\\dot{7}\\)",
+    correctLabel: "ㅂ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 7.9\\dot{1}\\)",
+    correctLabel: "ㄷ"
+  },
+  {
+    type: 'formula',
+    questionText: "다음 순환 소수를 기약분수로 나타내기 위한 식을 구하시오. \\(x = 0.99\\dot{9}\\)",
+    correctLabel: "ㅂ"
+  }
+];
+
+// ---------------------- 유형② (기약분수 구하기) 20문제 ----------------------
+const fractionProblems = [
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.\\dot{5}\\)",
+    correctP: "5",
+    correctQ: "9"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.\\dot{8}\\)",
+    correctP: "8",
+    correctQ: "9"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.1\\dot{6}\\)",
+    correctP: "1",
+    correctQ: "6"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 2.7\\dot{3}\\)",
+    correctP: "41",
+    correctQ: "15"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.32\\dot{7}\\)",
+    correctP: "59",
+    correctQ: "180"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 1.\\dot{4}\\)",
+    correctP: "13",
+    correctQ: "9"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.4\\dot{3}\\)",
+    correctP: "13",
+    correctQ: "30"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 3.0\\dot{9}\\)",
+    correctP: "31",
+    correctQ: "10"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 4.\\dot{2}\\)",
+    correctP: "38",
+    correctQ: "9"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 5.12\\dot{3}\\)",
+    correctP: "1537",
+    correctQ: "300"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.0\\dot{7}\\)",
+    correctP: "7",
+    correctQ: "90"
+  },
+  {
+    // 수정: 2.3\dot{45} → 2.3\dot{4}\dot{5}
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 2.3\\dot{4}\\dot{5}\\)",
+    correctP: "129",
+    correctQ: "55"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.01\\dot{6}\\)",
+    correctP: "1",
+    correctQ: "60"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 1.63\\dot{3}\\)",
+    correctP: "49",
+    correctQ: "30"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.2\\dot{4}\\)",
+    correctP: "11",
+    correctQ: "45"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 4.9\\dot{5}\\)",
+    correctP: "223",
+    correctQ: "45"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.53\\dot{1}\\)",
+    correctP: "239",
+    correctQ: "450"
+  },
+  {
+    // 수정: 7.8\dot{34} → 7.8\dot{3}\dot{4}
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 7.8\\dot{3}\\dot{4}\\)",
+    correctP: "3878",
+    correctQ: "495"
+  },
+  {
+    // 수정: 1.\dot{04} → 1.\dot{0}\dot{4}
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 1.\\dot{0}\\dot{4}\\)",
+    correctP: "103",
+    correctQ: "99"
+  },
+  {
+    type: 'fraction',
+    questionText: "다음 순환 소수를 기약분수로 나타내시오. \\(x = 0.00\\dot{9}\\)",
+    correctP: "1",
+    correctQ: "100"
+  }
+];
+
+/*
+  모든 40문제를 하나의 배열에 합쳐 두고,
+  이후 문제를 무작위로 섞어 출제한다.
+*/
+function shuffleArray(array) {
+  for(let i=array.length-1; i>0; i--){
+    const j = Math.floor(Math.random()* (i+1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+function combineAndShuffleAllQuestions(){
+  // 40문제를 합침
+  const combined = [...formulaProblems, ...fractionProblems];
+  // 셔플
+  shuffleArray(combined);
+  return combined;
+}
+
+/*
+  ========== 초기화 ==========
+*/
+function startGame(){
+  const nameInput = document.getElementById("playerName");
+  playerName = nameInput.value.trim();
+  if(!playerName) {
+    alert("이름을 입력하세요!");
+    return;
+  }
+
+  const diffSelect = document.getElementById("difficultySelect");
+  difficulty = diffSelect.value;
+
+  switch(difficulty){
+    case "hardest":
+      timeStartValue = 20; 
+      pointPerCorrect = 20;
+      break;
+    case "hard":
+      timeStartValue = 30; 
+      pointPerCorrect = 15;
+      break;
+    case "medium":
+      timeStartValue = 40; 
+      pointPerCorrect = 13;
+      break;
+    case "easy":
+      timeStartValue = 999999;  // 사실상 무제한
+      pointPerCorrect = 10;
+      break;
+  }
+
+  // UI 전환
+  document.getElementById("startScreen").classList.add("hidden");
+  document.getElementById("gameScreen").classList.remove("hidden");
+
+  // 초기값 세팅
+  energy = timeStartValue;
+  score = 0;
+  lives = 3;
+  currentQuestionIndex = 0;
+
+  document.getElementById("scoreDisplay").textContent = score;
+  document.getElementById("livesDisplay").textContent = "남은 기회: " + lives;
+
+  // 40문제를 셔플하여 allQuestions에 저장
+  allQuestions = combineAndShuffleAllQuestions();
+
+  // 타이머 시작
+  startEnergyTimer();
+  startTotalTimeTimer();
+
+  // 첫 문제 표시
+  showCurrentQuestion();
+}
+
+/*
+  ========== 타이머 / 에너지바 관련 ==========
+*/
+function startEnergyTimer(){
+  clearInterval(energyInterval);
+  energyInterval = setInterval(function(){
+    if(difficulty === "easy"){
+      // 하(시간제한없음)인 경우 에너지 감소X
+      updateEnergyBar(100); 
+      return;
+    }
+    energy -= 0.2; 
+    if(energy <= 0){
+      clearInterval(energyInterval);
+      loseLifeByTimeout();
+    }
+    const percentage = (energy / timeStartValue) * 100;
+    updateEnergyBar(percentage);
+  }, 200);
+}
+
+function updateEnergyBar(percentage){
+  const bar = document.getElementById("energyBar");
+  if(percentage < 0) percentage = 0;
+  bar.style.width = percentage + "%";
+}
+
+function loseLifeByTimeout(){
+  lives--;
+  if(lives <= 0){
+    endGame();
+    return;
+  }
+  document.getElementById("livesDisplay").textContent = "남은 기회: " + lives;
+  alert("시간이 초과되었습니다! 기회가 1회 감소합니다.");
+  document.getElementById("submitAnswerBtn").classList.add("hidden");
+  document.getElementById("nextQuestionBtn").classList.remove("hidden");
+  questionInProgress.showCorrect = true;
+  showAnswerIfWrong();
+}
+
+function startTotalTimeTimer(){
+  clearInterval(totalTimeInterval);
+  totalTime = 0;
+  totalTimeInterval = setInterval(function(){
+    totalTime += 1;
+    document.getElementById("totalTimeDisplay").textContent = "총 경과 시간: " + totalTime + "초";
+  },1000);
+}
+
+/*
+  ========== 문제 표시 로직 ==========
+*/
+function showCurrentQuestion(){
+  if(currentQuestionIndex >= allQuestions.length){
+    // 40문제 모두 푼 경우 => “랜덤으로 끝없이” 나오도록 다시 섞고 이어서 계속
+    shuffleArray(allQuestions); 
+    currentQuestionIndex = 0; 
+  }
+  answered = false;
+
+  // 에너지바를 다시 초기화
+  energy = timeStartValue;
+
+  document.getElementById("submitAnswerBtn").classList.remove("hidden");
+  document.getElementById("nextQuestionBtn").classList.add("hidden");
+
+  const qArea = document.getElementById("questionArea");
+  qArea.innerHTML = "";
+
+  questionInProgress = allQuestions[currentQuestionIndex];
+  const qDiv = document.createElement("div");
+  qDiv.className = "question-container";
+
+  // 문제 텍스트
+  const qText = document.createElement("div");
+  qText.innerHTML = questionInProgress.questionText;
+  qDiv.appendChild(qText);
+
+  // 문제 유형별 UI
+  if(questionInProgress.type === "formula"){
+    // 사지선다
+    const choicesDiv = document.createElement("div");
+    choicesDiv.className = "choices";
+
+    const correctObj = formulaChoicesMaster.find(c=>c.label===questionInProgress.correctLabel);
+    const wrongList = formulaChoicesMaster.filter(c=>c.label!==questionInProgress.correctLabel);
+    shuffleArray(wrongList);
+    const distractors = wrongList.slice(0,3);
+    const fourChoices = [correctObj, ...distractors];
+    shuffleArray(fourChoices);
+
+    fourChoices.forEach(fc=>{
+      const item = document.createElement("div");
+      item.className = "choice-item";
+      const radioId = "choice_" + fc.label;
+      item.innerHTML = `
+        <input type="radio" name="formulaChoice" id="${radioId}" value="${fc.label}" />
+        <label for="${radioId}">${fc.label}: ${fc.expr}</label>
+      `;
+      choicesDiv.appendChild(item);
+    });
+    qDiv.appendChild(choicesDiv);
+
+  } else {
+    // 기약분수 (주관식)
+    const inputDiv = document.createElement("div");
+    inputDiv.className = "input-fraction";
+    inputDiv.innerHTML = `
+      <label>분자(\\(p\\)): <input type="number" id="fractionP" /></label><br>
+      <label>분모(\\(q\\)): <input type="number" id="fractionQ" /></label>
+    `;
+    qDiv.appendChild(inputDiv);
+  }
+
+  qArea.appendChild(qDiv);
+  MathJax.typeset();
+}
+
+/*
+  ========== 정답 제출 처리 ==========
+*/
+function submitAnswer(){
+  if(answered) return;
+  answered = true;
+
+  let isCorrect = false;
+  let correctAnswerText = "";
+
+  if(questionInProgress.type === "formula"){
+    // 사지선다
+    const selected = document.querySelector("input[name='formulaChoice']:checked");
+    if(!selected){
+      alert("보기를 선택하세요!");
+      answered = false;
+      return;
+    }
+    const chosenLabel = selected.value;
+    isCorrect = (chosenLabel === questionInProgress.correctLabel);
+
+    const correctObj = formulaChoicesMaster.find(c=>c.label===questionInProgress.correctLabel);
+    correctAnswerText = correctObj ? (correctObj.label + ": " + correctObj.expr) : "(알 수 없음)";
+  } else {
+    // fraction
+    const pVal = document.getElementById("fractionP").value.trim();
+    const qVal = document.getElementById("fractionQ").value.trim();
+
+    if(!pVal || !qVal){
+      alert("분자와 분모를 입력하세요!");
+      answered = false;
+      return;
+    }
+    isCorrect = (pVal === questionInProgress.correctP && qVal === questionInProgress.correctQ);
+    correctAnswerText = "\\(\\dfrac{" + questionInProgress.correctP + "}{" + questionInProgress.correctQ + "}\\)";
+  }
+
+  if(isCorrect){
+    score += pointPerCorrect;
+    document.getElementById("scoreDisplay").textContent = score;
+    alert("정답입니다!");
+  } else {
+    // 오답
+    lives--;
+    document.getElementById("livesDisplay").textContent = "남은 기회: " + lives;
+    if(lives <= 0){
+      alert("틀렸습니다!\n정답: " + correctAnswerText + "\n남은 기회가 없으므로 게임 종료");
+      endGame();
+      return;
+    } else {
+      alert("틀렸습니다!\n정답: " + correctAnswerText);
+    }
+  }
+
+  document.getElementById("submitAnswerBtn").classList.add("hidden");
+  document.getElementById("nextQuestionBtn").classList.remove("hidden");
+  clearInterval(energyInterval);
+}
+
+function nextQuestion(){
+  currentQuestionIndex++;
+  showCurrentQuestion();
+  startEnergyTimer();
+}
+
+/*
+  ========== 게임 종료 처리 ==========
+*/
+function endGame(){
+  clearInterval(energyInterval);
+  clearInterval(totalTimeInterval);
+
+  document.getElementById("submitAnswerBtn").classList.add("hidden");
+  document.getElementById("nextQuestionBtn").classList.add("hidden");
+  document.getElementById("endGameSection").classList.remove("hidden");
+}
+
+/*
+  ========== 점수 전송 ==========
+*/
+function sendScore(){
+  saveData("순환소수를 분수로", playerName, score, totalTime);
+}
+
+/*
+  ========== 서버에 데이터 POST 함수 ==========
+*/
+async function saveData(game, name, score, elapsedTime) {
+  const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+  const requestData = {
+      game,
+      name,
+      score: parseInt(score, 10),
+      elapsedTime: parseInt(elapsedTime, 10)
+  };
+
+  try {
+      const response = await fetch(FUNCTION_URL, {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestData)
+      });
+
+      const responseData = await response.json();
+
+      if (response.ok) {
+          document.getElementById('response').innerText =
+              `성공: ${JSON.stringify(responseData, null, 2)}`;
+      } else {
+          document.getElementById('response').innerText =
+              `오류: ${JSON.stringify(responseData, null, 2)}`;
+      }
+  } catch (error) {
+      console.error('요청 실패:', error);
+      document.getElementById('response').innerText =
+          `네트워크 오류: ${error.message}`;
+  }
+}
+</script>
+</body>
+</html>
